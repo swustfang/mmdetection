@@ -289,17 +289,23 @@ class VFNetHead(ATSSHead, FCOSHead):
         # compute star deformable convolution offsets
         # converting dcn_offset to reg_feat.dtype thus VFNet can be
         # trained with FP16
-        dcn_offset = self.star_dcn_offset(bbox_pred, self.gradient_mul,
-                                          stride).to(reg_feat.dtype)
+        # 使用star conv 得到dcn 偏移参数
+        dcn_offset_init = self.star_dcn_offset(bbox_pred, self.gradient_mul,
+                                               stride).to(reg_feat.dtype)
 
         # refine the bbox_pred
-        reg_feat = self.relu(self.vfnet_reg_refine_dconv(reg_feat, dcn_offset))
+        reg_feat = self.relu(self.vfnet_reg_refine_dconv(reg_feat, dcn_offset_init))
         bbox_pred_refine = scale_refine(
             self.vfnet_reg_refine(reg_feat)).float().exp()
         bbox_pred_refine = bbox_pred_refine * bbox_pred.detach()
 
+        # 使用star conv 得到第二次的 dcn 偏移参数
+        dcn_offset_refine = self.star_dcn_offset(bbox_pred_refine, self.gradient_mul,
+                                                 stride).to(reg_feat.dtype)
+
         # predict the iou-aware cls score
-        cls_feat = self.relu(self.vfnet_cls_dconv(cls_feat, dcn_offset))
+        # 使用refine后的边界特征去加强分数
+        cls_feat = self.relu(self.vfnet_cls_dconv(cls_feat, dcn_offset_refine))
         cls_score = self.vfnet_cls(cls_feat)
 
         if self.training:
@@ -474,7 +480,7 @@ class VFNetHead(ATSSHead, FCOSHead):
 
             # build IoU-aware cls_score targets
             if self.use_vfl:
-                pos_ious = (iou_targets_rf / 2 + 0.5).clone().detach()
+                pos_ious = iou_targets_rf.clone().detach()
                 cls_iou_targets = torch.zeros_like(flatten_cls_scores)
                 cls_iou_targets[pos_inds, pos_labels] = pos_ious
         else:
