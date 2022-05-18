@@ -97,7 +97,7 @@ class AnchorGenerator:
             self.scales = torch.Tensor(scales)
         elif octave_base_scale is not None and scales_per_octave is not None:
             octave_scales = np.array(
-                [2**(i / scales_per_octave) for i in range(scales_per_octave)])
+                [2 ** (i / scales_per_octave) for i in range(scales_per_octave)])
             scales = octave_scales * octave_base_scale
             self.scales = torch.Tensor(scales)
         else:
@@ -128,6 +128,7 @@ class AnchorGenerator:
         """int: number of feature levels that the generator will be applied"""
         return len(self.strides)
 
+    # 获得
     def gen_base_anchors(self):
         """Generate base anchors.
 
@@ -194,8 +195,10 @@ class AnchorGenerator:
         return base_anchors
 
     def _meshgrid(self, x, y, row_major=True):
+        # 根据x，y坐标生成网格
+        # eg.  x = [1, 3, 5]          y = [2, 4, 6]
+        # ---> x=[1,3,5,1,3,5,1,3,5]  y=[2,2,2,4,4,4,6,6,6]
         """Generate mesh grid of x and y.
-
         Args:
             x (torch.Tensor): Grids of x dimension.
             y (torch.Tensor): Grids of y dimension.
@@ -213,6 +216,7 @@ class AnchorGenerator:
         else:
             return yy, xx
 
+    #  直接继承于AnchorGenerator的方法，把base anchor平移到各个grid上
     def grid_priors(self, featmap_sizes, dtype=torch.float32, device='cuda'):
         """Generate grid anchors in multiple feature levels.
 
@@ -265,9 +269,11 @@ class AnchorGenerator:
         stride_w, stride_h = self.strides[level_idx]
         # First create Range with the default dtype, than convert to
         # target `dtype` for onnx exporting.
+        # 乘以stride 映射回原图
         shift_x = torch.arange(0, feat_w, device=device).to(dtype) * stride_w
         shift_y = torch.arange(0, feat_h, device=device).to(dtype) * stride_h
 
+        # 根据x,y生成网格位置
         shift_xx, shift_yy = self._meshgrid(shift_x, shift_y)
         shifts = torch.stack([shift_xx, shift_yy, shift_xx, shift_yy], dim=-1)
         # first feat_w elements correspond to the first row of shifts
@@ -311,7 +317,7 @@ class AnchorGenerator:
         y = (prior_idxs // width //
              num_base_anchors) % height * self.strides[level_idx][1]
         priors = torch.stack([x, y, x, y], 1).to(dtype).to(device) + \
-            self.base_anchors[level_idx][base_anchor_id, :].to(device)
+                 self.base_anchors[level_idx][base_anchor_id, :].to(device)
 
         return priors
 
@@ -389,6 +395,7 @@ class AnchorGenerator:
         # then (0, 1), (0, 2), ...
         return all_anchors
 
+    # 由于数据预处理时，填充了大量的黑边，所以黑边上的anchor不用计算loss，直接忽略
     def valid_flags(self, featmap_sizes, pad_shape, device='cuda'):
         """Generate valid flags of anchors in multiple feature levels.
 
@@ -401,19 +408,20 @@ class AnchorGenerator:
         Return:
             list(torch.Tensor): Valid flags of anchors in multiple levels.
         """
+        # pad_shape是有效特征图大小，是指Pad后的size,collate之前
         assert self.num_levels == len(featmap_sizes)
         multi_level_flags = []
         for i in range(self.num_levels):
             anchor_stride = self.strides[i]
             feat_h, feat_w = featmap_sizes[i]
             h, w = pad_shape[:2]
-            valid_feat_h = min(int(np.ceil(h / anchor_stride[1])), feat_h)
-            valid_feat_w = min(int(np.ceil(w / anchor_stride[0])), feat_w)
+            valid_feat_h = min(int(np.ceil(h / anchor_stride[1])), feat_h)  # 获得有效的特征图
+            valid_feat_w = min(int(np.ceil(w / anchor_stride[0])), feat_w)  # 获得有效的特征图
             flags = self.single_level_valid_flags((feat_h, feat_w),
                                                   (valid_feat_h, valid_feat_w),
                                                   self.num_base_anchors[i],
                                                   device=device)
-            multi_level_flags.append(flags)
+            multi_level_flags.append(flags)  # 有效位置设置为1，否则为0
         return multi_level_flags
 
     def single_level_valid_flags(self,
@@ -421,6 +429,7 @@ class AnchorGenerator:
                                  valid_size,
                                  num_base_anchors,
                                  device='cuda'):
+        # 对于一个特征图的有效anchor进行标记
         """Generate the valid flags of anchor in a single feature map.
 
         Args:

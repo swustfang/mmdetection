@@ -267,22 +267,26 @@ class GuidedAnchorHead(AnchorHead):
 
         # for each image, we compute inside flags of multi level approxes
         inside_flag_list = []
+        # 每一个图片
         for img_id, img_meta in enumerate(img_metas):
             multi_level_flags = []
             multi_level_approxs = approxs_list[img_id]
 
             # obtain valid flags for each approx first
+            # 先获得有效的approx anchor
             multi_level_approx_flags = self.approx_anchor_generator \
                 .valid_flags(featmap_sizes,
                              img_meta['pad_shape'],
                              device=device)
-
             for i, flags in enumerate(multi_level_approx_flags):
+                # 每一层特征图
                 approxs = multi_level_approxs[i]
                 inside_flags_list = []
                 for i in range(self.approxs_per_octave):
+                    # 对应9中形状anchor的每一种的所有anchor以及标记
                     split_valid_flags = flags[i::self.approxs_per_octave]
                     split_approxs = approxs[i::self.approxs_per_octave, :]
+                    # 看anchor是否在border之内
                     inside_flags = anchor_inside_flags(
                         split_approxs, split_valid_flags,
                         img_meta['img_shape'][:2],
@@ -291,7 +295,7 @@ class GuidedAnchorHead(AnchorHead):
                 # inside_flag for a position is true if any anchor in this
                 # position is true
                 inside_flags = (
-                    torch.stack(inside_flags_list, 0).sum(dim=0) > 0)
+                        torch.stack(inside_flags_list, 0).sum(dim=0) > 0)
                 multi_level_flags.append(inside_flags)
             inside_flag_list.append(multi_level_flags)
         return approxs_list, inside_flag_list
@@ -432,7 +436,7 @@ class GuidedAnchorHead(AnchorHead):
             scale = torch.sqrt((gt_bboxes[:, 2] - gt_bboxes[:, 0]) *
                                (gt_bboxes[:, 3] - gt_bboxes[:, 1]))
             min_anchor_size = scale.new_full(
-                (1, ), float(anchor_scale * anchor_strides[0]))
+                (1,), float(anchor_scale * anchor_strides[0]))
             # assign gt bboxes to different feature levels w.r.t. their scales
             target_lvls = torch.floor(
                 torch.log2(scale) - torch.log2(min_anchor_size) + 0.5)
@@ -448,11 +452,11 @@ class GuidedAnchorHead(AnchorHead):
                 ctr_x1, ctr_y1, ctr_x2, ctr_y2 = calc_region(
                     gt_, r1, featmap_sizes[lvl])
                 all_loc_targets[lvl][img_id, 0, ctr_y1:ctr_y2 + 1,
-                                     ctr_x1:ctr_x2 + 1] = 1
+                ctr_x1:ctr_x2 + 1] = 1
                 all_loc_weights[lvl][img_id, 0, ignore_y1:ignore_y2 + 1,
-                                     ignore_x1:ignore_x2 + 1] = 0
+                ignore_x1:ignore_x2 + 1] = 0
                 all_loc_weights[lvl][img_id, 0, ctr_y1:ctr_y2 + 1,
-                                     ctr_x1:ctr_x2 + 1] = 1
+                ctr_x1:ctr_x2 + 1] = 1
                 # calculate ignore map on nearby low level feature
                 if lvl > 0:
                     d_lvl = lvl - 1
@@ -461,7 +465,7 @@ class GuidedAnchorHead(AnchorHead):
                     ignore_x1, ignore_y1, ignore_x2, ignore_y2 = calc_region(
                         gt_, r2, featmap_sizes[d_lvl])
                     all_ignore_map[d_lvl][img_id, 0, ignore_y1:ignore_y2 + 1,
-                                          ignore_x1:ignore_x2 + 1] = 1
+                    ignore_x1:ignore_x2 + 1] = 1
                 # calculate ignore map on nearby high level feature
                 if lvl < num_lvls - 1:
                     u_lvl = lvl + 1
@@ -470,7 +474,7 @@ class GuidedAnchorHead(AnchorHead):
                     ignore_x1, ignore_y1, ignore_x2, ignore_y2 = calc_region(
                         gt_, r2, featmap_sizes[u_lvl])
                     all_ignore_map[u_lvl][img_id, 0, ignore_y1:ignore_y2 + 1,
-                                          ignore_x1:ignore_x2 + 1] = 1
+                    ignore_x1:ignore_x2 + 1] = 1
         for lvl_id in range(num_lvls):
             # ignore negative regions w.r.t. ignore map
             all_loc_weights[lvl_id][(all_loc_weights[lvl_id] < 0)
@@ -513,7 +517,7 @@ class GuidedAnchorHead(AnchorHead):
             tuple
         """
         if not inside_flags.any():
-            return (None, ) * 5
+            return (None,) * 5
         # assign gt and sample anchors
         expand_inside_flags = inside_flags[:, None].expand(
             -1, self.approxs_per_octave).reshape(-1)
@@ -589,14 +593,14 @@ class GuidedAnchorHead(AnchorHead):
             gt_bboxes_ignore_list = [None for _ in range(num_imgs)]
         (all_bbox_anchors, all_bbox_gts, all_bbox_weights, pos_inds_list,
          neg_inds_list) = multi_apply(
-             self._ga_shape_target_single,
-             approx_flat_list,
-             inside_flag_flat_list,
-             square_flat_list,
-             gt_bboxes_list,
-             gt_bboxes_ignore_list,
-             img_metas,
-             unmap_outputs=unmap_outputs)
+            self._ga_shape_target_single,
+            approx_flat_list,
+            inside_flag_flat_list,
+            square_flat_list,
+            gt_bboxes_list,
+            gt_bboxes_ignore_list,
+            img_metas,
+            unmap_outputs=unmap_outputs)
         # no valid anchors
         if any([bbox_anchors is None for bbox_anchors in all_bbox_anchors]):
             return None
@@ -682,7 +686,7 @@ class GuidedAnchorHead(AnchorHead):
          anchor_bg_num) = shape_targets
         anchor_total_num = (
             anchor_fg_num if not self.ga_sampling else anchor_fg_num +
-            anchor_bg_num)
+                                                       anchor_bg_num)
 
         # get anchor targets
         label_channels = self.cls_out_channels if self.use_sigmoid_cls else 1
@@ -835,7 +839,7 @@ class GuidedAnchorHead(AnchorHead):
                 bbox_pred = bbox_pred.unsqueeze(0)
             # filter anchors, bbox_pred, scores w.r.t. scores
             nms_pre = cfg.get('nms_pre', -1)
-            if nms_pre > 0 and scores.shape[0] > nms_pre:
+            if 0 < nms_pre < scores.shape[0]:
                 if self.use_sigmoid_cls:
                     max_scores, _ = scores.max(dim=1)
                 else:

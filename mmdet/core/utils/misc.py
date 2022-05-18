@@ -25,6 +25,10 @@ def multi_apply(func, *args, **kwargs):
         tuple(list): A tuple containing multiple list, each list contains \
             a kind of returned results by the function
     """
+    # 将输入函数func作用在Iterable的每一个参数上
+    # partial 表示固定多变量中的部分变量，产生一个新函数
+    # Kwargs 表示固定的部分变量
+    # arg 是list数据，每一次迭代都是迭代List中的每一个数据
     pfunc = partial(func, **kwargs) if kwargs else func
     map_results = map(pfunc, *args)
     return tuple(map(list, zip(*map_results)))
@@ -34,10 +38,10 @@ def unmap(data, count, inds, fill=0):
     """Unmap a subset of item (data) back to the original set of items (of size
     count)"""
     if data.dim() == 1:
-        ret = data.new_full((count, ), fill)
+        ret = data.new_full((count,), fill)
         ret[inds.type(torch.bool)] = data
     else:
-        new_size = (count, ) + data.size()[1:]
+        new_size = (count,) + data.size()[1:]
         ret = data.new_full(new_size, fill)
         ret[inds.type(torch.bool), :] = data
     return ret

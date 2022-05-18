@@ -17,6 +17,7 @@ class PointGenerator:
         else:
             return yy, xx
 
+    # 利用输入特征图尺寸加上的base anchor，得到每个特征图位置对应于原图的anchor
     def grid_points(self, featmap_size, stride=16, device='cuda'):
         feat_h, feat_w = featmap_size
         shift_x = torch.arange(0., feat_w, device=device) * stride

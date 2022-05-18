@@ -29,15 +29,15 @@ def quality_focal_loss(pred, target, beta=2.0):
     assert len(target) == 2, """target for QFL must be a tuple of two elements,
         including category label and quality label, respectively"""
     # label denotes the category id, score denotes the quality score
-    label, score = target
+    label, score = target  # lable(N) 类别，score(N),预测bbox和gt bbox的iou
 
     # negatives are supervised by 0 quality score
     pred_sigmoid = pred.sigmoid()
     scale_factor = pred_sigmoid
     zerolabel = scale_factor.new_zeros(pred.shape)
+    # 先假设所有label都是负样本，计算bce loos，呈上sigmoid^beta次方，达到focal效应
     loss = F.binary_cross_entropy_with_logits(
         pred, zerolabel, reduction='none') * scale_factor.pow(beta)
-
     # FG cat_id: [0, num_classes -1], BG cat_id: num_classes
     bg_class_ind = pred.size(1)
     pos = ((label >= 0) & (label < bg_class_ind)).nonzero().squeeze(1)
@@ -120,7 +120,7 @@ def distribution_focal_loss(pred, label):
     weight_left = dis_right.float() - label
     weight_right = label - dis_left.float()
     loss = F.cross_entropy(pred, dis_left, reduction='none') * weight_left \
-        + F.cross_entropy(pred, dis_right, reduction='none') * weight_right
+           + F.cross_entropy(pred, dis_right, reduction='none') * weight_right
     return loss
 
 

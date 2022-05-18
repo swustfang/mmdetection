@@ -141,6 +141,9 @@ def generat_buckets(proposals, num_buckets, scale_factor=1.0):
     return bucket_w, bucket_h, l_buckets, r_buckets, t_buckets, d_buckets
 
 
+# 获取桶回归方式的结果
+# 第一次的二值估计分类定位
+# 第二次的细回归定位
 @mmcv.jit(coderize=True)
 def bbox2bucket(proposals,
                 gt,
@@ -215,18 +218,17 @@ def bbox2bucket(proposals,
     # generate offset weights of top-k nearest buckets
     for k in range(offset_topk):
         if k >= 1:
-            offset_l_weights[inds, l_label[:,
-                                           k]] = (l_topk[:, k] <
-                                                  offset_upperbound).float()
+            # top排第二 就是距离第二近的桶，但是距离不能超过一个桶的长度， 权重设置为1
+            offset_l_weights[inds, l_label[:, k]] = (l_topk[:, k] < offset_upperbound).float()
             offset_r_weights[inds, r_label[:,
-                                           k]] = (r_topk[:, k] <
-                                                  offset_upperbound).float()
+                                   k]] = (r_topk[:, k] <
+                                          offset_upperbound).float()
             offset_t_weights[inds, t_label[:,
-                                           k]] = (t_topk[:, k] <
-                                                  offset_upperbound).float()
+                                   k]] = (t_topk[:, k] <
+                                          offset_upperbound).float()
             offset_d_weights[inds, d_label[:,
-                                           k]] = (d_topk[:, k] <
-                                                  offset_upperbound).float()
+                                   k]] = (d_topk[:, k] <
+                                          offset_upperbound).float()
         else:
             offset_l_weights[inds, l_label[:, k]] = 1.0
             offset_r_weights[inds, r_label[:, k]] = 1.0
@@ -237,7 +239,7 @@ def bbox2bucket(proposals,
     offsets_weights = torch.cat([
         offset_l_weights, offset_r_weights, offset_t_weights, offset_d_weights
     ],
-                                dim=-1)
+        dim=-1)
 
     # generate bucket labels and weight
     side_num = int(np.ceil(num_buckets / 2.0))
@@ -255,7 +257,7 @@ def bbox2bucket(proposals,
         bucket_cls_l_weights, bucket_cls_r_weights, bucket_cls_t_weights,
         bucket_cls_d_weights
     ],
-                                   dim=-1)
+        dim=-1)
     # ignore second nearest buckets for cls if necessary
     if cls_ignore_neighbor:
         bucket_cls_weights = (~((bucket_cls_weights == 1) &

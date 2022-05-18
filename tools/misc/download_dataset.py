@@ -12,12 +12,12 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description='Download datasets for training')
     parser.add_argument(
-        '--dataset-name', type=str, help='dataset name', default='coco2017')
+        '--dataset-name', type=str, help='dataset name', default='voc2007')
     parser.add_argument(
         '--save-dir',
         type=str,
         help='the dir to save dataset',
-        default='data/coco')
+        default='data/voc')
     parser.add_argument(
         '--unzip',
         action='store_true',

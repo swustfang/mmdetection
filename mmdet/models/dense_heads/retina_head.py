@@ -64,6 +64,7 @@ class RetinaHead(AnchorHead):
         self.cls_convs = nn.ModuleList()
         self.reg_convs = nn.ModuleList()
         for i in range(self.stacked_convs):
+            # 构建4个中间卷积层，分类和回归不共享参数
             chn = self.in_channels if i == 0 else self.feat_channels
             self.cls_convs.append(
                 ConvModule(
@@ -83,11 +84,13 @@ class RetinaHead(AnchorHead):
                     padding=1,
                     conv_cfg=self.conv_cfg,
                     norm_cfg=self.norm_cfg))
+        # 最终分类层 anchor数目*类数
         self.retina_cls = nn.Conv2d(
             self.feat_channels,
             self.num_base_priors * self.cls_out_channels,
             3,
             padding=1)
+        # 最终回归层 anchor数目*4
         self.retina_reg = nn.Conv2d(
             self.feat_channels, self.num_base_priors * 4, 3, padding=1)
 
@@ -104,12 +107,15 @@ class RetinaHead(AnchorHead):
                 bbox_pred (Tensor): Box energies / deltas for a single scale
                     level, the channels number is num_anchors * 4.
         """
+        # x 表示某一个特征层
         cls_feat = x
         reg_feat = x
+        # 先经过四个卷积层
         for cls_conv in self.cls_convs:
             cls_feat = cls_conv(cls_feat)
         for reg_conv in self.reg_convs:
             reg_feat = reg_conv(reg_feat)
+        # 分类和回归
         cls_score = self.retina_cls(cls_feat)
         bbox_pred = self.retina_reg(reg_feat)
         return cls_score, bbox_pred

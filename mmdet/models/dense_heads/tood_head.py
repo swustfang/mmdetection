@@ -230,6 +230,7 @@ class TOODHead(ATSSHead):
             b, c, h, w = x.shape
             anchor = self.prior_generator.single_level_grid_priors(
                 (h, w), idx, device=x.device)
+            # 生成每一层的所有标准anchor 每一个位置上有9个
             anchor = torch.cat([anchor for _ in range(b)])
             # extract task interactive features
             inter_feats = []

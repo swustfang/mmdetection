@@ -56,12 +56,14 @@ class SABLRetinaHead(BaseDenseHead, BBoxTestMixin):
                  in_channels,
                  stacked_convs=4,
                  feat_channels=256,
+                 # anchor 方法参数
                  approx_anchor_generator=dict(
                      type='AnchorGenerator',
                      octave_base_scale=4,
                      scales_per_octave=3,
                      ratios=[0.5, 1.0, 2.0],
                      strides=[8, 16, 32, 64, 128]),
+                 # 正方形anchor 方法参数
                  square_anchor_generator=dict(
                      type='AnchorGenerator',
                      ratios=[1.0],
@@ -69,23 +71,28 @@ class SABLRetinaHead(BaseDenseHead, BBoxTestMixin):
                      strides=[8, 16, 32, 64, 128]),
                  conv_cfg=None,
                  norm_cfg=None,
+                 # bbox 回归方式参数
                  bbox_coder=dict(
+                     # 是SABL独有的回归方式
                      type='BucketingBBoxCoder',
                      num_buckets=14,
                      scale_factor=3.0),
                  reg_decoded_bbox=False,
                  train_cfg=None,
                  test_cfg=None,
+                 # 对特征图位置的anchor进行分类（大类,pascal voc = 20, coco = 80）
                  loss_cls=dict(
                      type='FocalLoss',
                      use_sigmoid=True,
                      gamma=2.0,
                      alpha=0.25,
                      loss_weight=1.0),
+                 # bbox使用bucket方式中第一次粗回归的分类
                  loss_bbox_cls=dict(
                      type='CrossEntropyLoss',
                      use_sigmoid=True,
                      loss_weight=1.5),
+                 # bbox中第二次精回归
                  loss_bbox_reg=dict(
                      type='SmoothL1Loss', beta=1.0 / 9.0, loss_weight=1.5),
                  init_cfg=dict(
@@ -101,7 +108,9 @@ class SABLRetinaHead(BaseDenseHead, BBoxTestMixin):
         self.in_channels = in_channels
         self.num_classes = num_classes
         self.feat_channels = feat_channels
+        # 这个就是相当于在x轴这个方向生成了14个桶
         self.num_buckets = bbox_coder['num_buckets']
+        # 然后x轴的这个要分成两份,left和right,就是对应一条边的桶子数目，后边会直接conv出来 size_num*4个，相当于每一边7个桶
         self.side_num = int(np.ceil(self.num_buckets / 2))
 
         assert (approx_anchor_generator['octave_base_scale'] ==
@@ -109,6 +118,7 @@ class SABLRetinaHead(BaseDenseHead, BBoxTestMixin):
         assert (approx_anchor_generator['strides'] ==
                 square_anchor_generator['strides'])
 
+        # 构建anchor生成器
         self.approx_anchor_generator = build_prior_generator(
             approx_anchor_generator)
         self.square_anchor_generator = build_prior_generator(
@@ -119,35 +129,47 @@ class SABLRetinaHead(BaseDenseHead, BBoxTestMixin):
         # one anchor per location
         self.num_base_priors = self.square_anchor_generator.num_base_priors[0]
 
+        # 这里默认是4，卷积4次
         self.stacked_convs = stacked_convs
         self.conv_cfg = conv_cfg
         self.norm_cfg = norm_cfg
 
+        # 回归参数解压模块，就是将回归参数应用到ahchor，然后得到对应原图的上的位置
         self.reg_decoded_bbox = reg_decoded_bbox
 
         self.use_sigmoid_cls = loss_cls.get('use_sigmoid', False)
+        # 如果没有用FocalLoss这些Loss方法就要分正负样本，
         self.sampling = loss_cls['type'] not in [
             'FocalLoss', 'GHMC', 'QualityFocalLoss'
         ]
+        # 是否是用sigmoid来分类，False则用softmax分类
         if self.use_sigmoid_cls:
             self.cls_out_channels = num_classes
         else:
             self.cls_out_channels = num_classes + 1
 
+        # 构建bbox回归器，规定bbox回归的方式和参数
         self.bbox_coder = build_bbox_coder(bbox_coder)
+        # 构建损失计算器
+        # 多分类FocalLoss损失
         self.loss_cls = build_loss(loss_cls)
+        # Bucket回归二值交叉熵分类损失和L1回归损失
         self.loss_bbox_cls = build_loss(loss_bbox_cls)
         self.loss_bbox_reg = build_loss(loss_bbox_reg)
 
+        # 一些训练和验证的参数
         self.train_cfg = train_cfg
         self.test_cfg = test_cfg
 
         if self.train_cfg:
+            # 构建gt与anchor的匹配方式
             self.assigner = build_assigner(self.train_cfg.assigner)
             # use PseudoSampler when sampling is False
+            #
             if self.sampling and hasattr(self.train_cfg, 'sampler'):
                 sampler_cfg = self.train_cfg.sampler
             else:
+                # 使用伪采样器，这里使用了focal_loss所以不需要正负样本采样
                 sampler_cfg = dict(type='PseudoSampler')
             self.sampler = build_sampler(sampler_cfg, context=self)
 
@@ -239,6 +261,7 @@ class SABLRetinaHead(BaseDenseHead, BBoxTestMixin):
                    label_channels=None,
                    sampling=True,
                    unmap_outputs=True):
+        # 计算桶的目标gt
         """Compute bucketing targets.
         Args:
             approx_list (list[list]): Multi level approxs of each image.
@@ -270,7 +293,7 @@ class SABLRetinaHead(BaseDenseHead, BBoxTestMixin):
                 - num_total_pos (int): Number of positive samples in all \
                     images.
                 - num_total_neg (int): Number of negative samples in all \
-                    images.
+                    images.e
         """
         num_imgs = len(img_metas)
         assert len(approx_list) == len(inside_flag_list) == len(
@@ -295,17 +318,17 @@ class SABLRetinaHead(BaseDenseHead, BBoxTestMixin):
         (all_labels, all_label_weights, all_bbox_cls_targets,
          all_bbox_cls_weights, all_bbox_reg_targets, all_bbox_reg_weights,
          pos_inds_list, neg_inds_list) = multi_apply(
-             self._get_target_single,
-             approx_flat_list,
-             inside_flag_flat_list,
-             square_flat_list,
-             gt_bboxes_list,
-             gt_bboxes_ignore_list,
-             gt_labels_list,
-             img_metas,
-             label_channels=label_channels,
-             sampling=sampling,
-             unmap_outputs=unmap_outputs)
+            self._get_target_single,
+            approx_flat_list,
+            inside_flag_flat_list,
+            square_flat_list,
+            gt_bboxes_list,
+            gt_bboxes_ignore_list,
+            gt_labels_list,
+            img_metas,
+            label_channels=label_channels,
+            sampling=sampling,
+            unmap_outputs=unmap_outputs)
         # no valid anchors
         if any([labels is None for labels in all_labels]):
             return None
@@ -327,6 +350,7 @@ class SABLRetinaHead(BaseDenseHead, BBoxTestMixin):
         return (labels_list, label_weights_list, bbox_cls_targets_list,
                 bbox_cls_weights_list, bbox_reg_targets_list,
                 bbox_reg_weights_list, num_total_pos, num_total_neg)
+
 
     def _get_target_single(self,
                            flat_approxs,
@@ -375,16 +399,18 @@ class SABLRetinaHead(BaseDenseHead, BBoxTestMixin):
                     in a single image
         """
         if not inside_flags.any():
-            return (None, ) * 8
+            return (None,) * 8
         # assign gt and sample anchors
         expand_inside_flags = inside_flags[:, None].expand(
             -1, self.approxs_per_octave).reshape(-1)
         approxs = flat_approxs[expand_inside_flags, :]
         squares = flat_squares[inside_flags, :]
 
+        # 为每特征层进行anchor的正负样本以及标签确定
         assign_result = self.assigner.assign(approxs, squares,
                                              self.approxs_per_octave,
                                              gt_bboxes, gt_bboxes_ignore)
+        # 使用的是伪采样 正负样本不变的，把正负样本取出来
         sampling_result = self.sampler.sample(assign_result, squares,
                                               gt_bboxes)
 
@@ -397,18 +423,18 @@ class SABLRetinaHead(BaseDenseHead, BBoxTestMixin):
             (num_valid_squares, self.side_num * 4))
         bbox_reg_weights = squares.new_zeros(
             (num_valid_squares, self.side_num * 4))
-        labels = squares.new_full((num_valid_squares, ),
+        labels = squares.new_full((num_valid_squares,),
                                   self.num_classes,
                                   dtype=torch.long)
         label_weights = squares.new_zeros(num_valid_squares, dtype=torch.float)
-
+        # 取出正负样本下标
         pos_inds = sampling_result.pos_inds
         neg_inds = sampling_result.neg_inds
         if len(pos_inds) > 0:
             (pos_bbox_reg_targets, pos_bbox_reg_weights, pos_bbox_cls_targets,
              pos_bbox_cls_weights) = self.bbox_coder.encode(
-                 sampling_result.pos_bboxes, sampling_result.pos_gt_bboxes)
-
+                sampling_result.pos_bboxes, sampling_result.pos_gt_bboxes)
+            # 对每一个正样本anchor 都生成bucket分类回归的标签和权重
             bbox_cls_targets[pos_inds, :] = pos_bbox_cls_targets
             bbox_reg_targets[pos_inds, :] = pos_bbox_reg_targets
             bbox_cls_weights[pos_inds, :] = pos_bbox_cls_weights
@@ -490,7 +516,7 @@ class SABLRetinaHead(BaseDenseHead, BBoxTestMixin):
 
         device = cls_scores[0].device
 
-        # get sampled approxes
+        # get sampled approxes 获取所有不超出边界的框
         approxs_list, inside_flag_list = GuidedAnchorHead.get_sampled_approxs(
             self, featmap_sizes, img_metas, device=device)
 
@@ -498,6 +524,7 @@ class SABLRetinaHead(BaseDenseHead, BBoxTestMixin):
 
         label_channels = self.cls_out_channels if self.use_sigmoid_cls else 1
 
+        # 回归
         cls_reg_targets = self.get_target(
             approxs_list,
             inside_flag_list,
@@ -510,11 +537,14 @@ class SABLRetinaHead(BaseDenseHead, BBoxTestMixin):
             sampling=self.sampling)
         if cls_reg_targets is None:
             return None
+
         (labels_list, label_weights_list, bbox_cls_targets_list,
          bbox_cls_weights_list, bbox_reg_targets_list, bbox_reg_weights_list,
          num_total_pos, num_total_neg) = cls_reg_targets
+
         num_total_samples = (
             num_total_pos + num_total_neg if self.sampling else num_total_pos)
+
         losses_cls, losses_bbox_cls, losses_bbox_reg = multi_apply(
             self.loss_single,
             cls_scores,

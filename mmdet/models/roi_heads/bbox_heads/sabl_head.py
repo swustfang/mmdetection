@@ -133,7 +133,6 @@ class SABLHead(BaseModule):
                 reg_in_channels,
                 self.reg_feat_up_ratio,
                 stride=self.reg_feat_up_ratio)
-
         self.reg_pre_convs = nn.ModuleList()
         for i in range(self.reg_pre_num):
             reg_pre_conv = ConvModule(

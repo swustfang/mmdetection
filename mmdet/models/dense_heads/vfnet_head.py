@@ -112,6 +112,7 @@ class VFNetHead(ATSSHead, FCOSHead):
                          bias_prob=0.01)),
                  **kwargs):
         # dcn base offsets, adapted from reppoints_head.py
+        # 可变性卷积
         self.num_dconv_points = 9
         self.dcn_kernel = int(np.sqrt(self.num_dconv_points))
         self.dcn_pad = int((self.dcn_kernel - 1) / 2)
@@ -320,7 +321,7 @@ class VFNetHead(ATSSHead, FCOSHead):
         """
         dcn_base_offset = self.dcn_base_offset.type_as(bbox_pred)
         bbox_pred_grad_mul = (1 - gradient_mul) * bbox_pred.detach() + \
-            gradient_mul * bbox_pred
+                             gradient_mul * bbox_pred
         # map to the feature map scale
         bbox_pred_grad_mul = bbox_pred_grad_mul / stride
         N, C, H, W = bbox_pred.size()
@@ -438,6 +439,7 @@ class VFNetHead(ATSSHead, FCOSHead):
             pos_points, pos_bbox_preds)
         pos_decoded_target_preds = self.bbox_coder.decode(
             pos_points, pos_bbox_targets)
+        # 计算了粗糙的预测box与对应gt_box的giou
         iou_targets_ini = bbox_overlaps(
             pos_decoded_bbox_preds,
             pos_decoded_target_preds.detach(),
@@ -448,6 +450,7 @@ class VFNetHead(ATSSHead, FCOSHead):
 
         pos_decoded_bbox_preds_refine = \
             self.bbox_coder.decode(pos_points, pos_bbox_preds_refine)
+        # 计算了refine后的预测box与对应gt_box的giou
         iou_targets_rf = bbox_overlaps(
             pos_decoded_bbox_preds_refine,
             pos_decoded_target_preds.detach(),
@@ -471,7 +474,7 @@ class VFNetHead(ATSSHead, FCOSHead):
 
             # build IoU-aware cls_score targets
             if self.use_vfl:
-                pos_ious = iou_targets_rf.clone().detach()
+                pos_ious = (iou_targets_rf / 2 + 0.5).clone().detach()
                 cls_iou_targets = torch.zeros_like(flatten_cls_scores)
                 cls_iou_targets[pos_inds, pos_labels] = pos_ious
         else:
@@ -630,7 +633,7 @@ class VFNetHead(ATSSHead, FCOSHead):
         assert len(
             featmap_sizes
         ) == self.atss_prior_generator.num_levels == \
-            self.fcos_prior_generator.num_levels
+               self.fcos_prior_generator.num_levels
 
         device = cls_scores[0].device
 

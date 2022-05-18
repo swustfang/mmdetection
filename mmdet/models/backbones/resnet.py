@@ -31,6 +31,7 @@ class BasicBlock(BaseModule):
         assert dcn is None, 'Not implemented yet.'
         assert plugins is None, 'Not implemented yet.'
 
+        # 两个batch normalization ，因为是写到函数里边可以切换那种，所以采用这种方式
         self.norm1_name, norm1 = build_norm_layer(norm_cfg, planes, postfix=1)
         self.norm2_name, norm2 = build_norm_layer(norm_cfg, planes, postfix=2)
 

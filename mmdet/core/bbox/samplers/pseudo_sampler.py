@@ -23,7 +23,7 @@ class PseudoSampler(BaseSampler):
 
     def sample(self, assign_result, bboxes, gt_bboxes, *args, **kwargs):
         """Directly returns the positive and negative indices  of samples.
-
+        # 就是一个对外接口，使用了focal loss 所以不需要再采样了
         Args:
             assign_result (:obj:`AssignResult`): Assigned results
             bboxes (torch.Tensor): Bounding boxes
@@ -32,11 +32,13 @@ class PseudoSampler(BaseSampler):
         Returns:
             :obj:`SamplingResult`: sampler results
         """
+        # 很简单，直接返回所有的正负样本
         pos_inds = torch.nonzero(
             assign_result.gt_inds > 0, as_tuple=False).squeeze(-1).unique()
         neg_inds = torch.nonzero(
             assign_result.gt_inds == 0, as_tuple=False).squeeze(-1).unique()
         gt_flags = bboxes.new_zeros(bboxes.shape[0], dtype=torch.uint8)
+        # 封装到sample_result类
         sampling_result = SamplingResult(pos_inds, neg_inds, bboxes, gt_bboxes,
                                          assign_result, gt_flags)
         return sampling_result

@@ -218,9 +218,11 @@ class FSAFHead(RetinaHead):
         assert len(featmap_sizes) == self.prior_generator.num_levels
         batch_size = len(gt_bboxes)
         device = cls_scores[0].device
+        # 生成anchor
         anchor_list, valid_flag_list = self.get_anchors(
             featmap_sizes, img_metas, device=device)
         label_channels = self.cls_out_channels if self.use_sigmoid_cls else 1
+        # 获取分类回归标签
         cls_reg_targets = self.get_targets(
             anchor_list,
             valid_flag_list,

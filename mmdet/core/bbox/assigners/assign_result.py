@@ -5,8 +5,8 @@ from mmdet.utils import util_mixins
 
 
 class AssignResult(util_mixins.NiceRepr):
+    # 存储assign的结果，继承于NiceRepr，为了方便print调试
     """Stores assignments between predicted and truth boxes.
-
     Attributes:
         num_gts (int): the number of truth boxes considered when computing this
             assignment
@@ -190,6 +190,7 @@ class AssignResult(util_mixins.NiceRepr):
         return self
 
     def add_gt_(self, gt_labels):
+        # 二阶段的目标检测，在训练roi head时需要用到，把gt也添加到proposal中，将被sampler调用。
         """Add ground truth as assigned results.
 
         Args:

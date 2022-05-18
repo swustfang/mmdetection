@@ -10,17 +10,17 @@ class BaseSampler(metaclass=ABCMeta):
     """Base class of samplers."""
 
     def __init__(self,
-                 num,
-                 pos_fraction,
-                 neg_pos_ub=-1,
-                 add_gt_as_proposals=True,
+                 num,  # 期望采样的正样本+负样本总数
+                 pos_fraction,  # 期待的正负样本比例，因此期望达到的正样本数量=num*pos_fraction，负样本就是剩下的
+                 neg_pos_ub=-1,  # 负样本数/正样本数 的上限
+                 add_gt_as_proposals=True,  # 两阶段目标检测器，在训练roi head时，是否把gt也作为proposal
                  **kwargs):
         self.num = num
         self.pos_fraction = pos_fraction
         self.neg_pos_ub = neg_pos_ub
         self.add_gt_as_proposals = add_gt_as_proposals
-        self.pos_sampler = self
-        self.neg_sampler = self
+        self.pos_sampler = self  # 也是bbox sampler类
+        self.neg_sampler = self  # 也是bbox sampler类
 
     @abstractmethod
     def _sample_pos(self, assign_result, num_expected, **kwargs):
@@ -38,8 +38,8 @@ class BaseSampler(metaclass=ABCMeta):
                gt_bboxes,
                gt_labels=None,
                **kwargs):
+        # 对外接口，assign_result就是bbox assign返回的AssignResult类
         """Sample positive and negative bboxes.
-
         This is a simple implementation of bbox sampling given candidates,
         assigning results and ground truth bboxes.
 
@@ -70,7 +70,8 @@ class BaseSampler(metaclass=ABCMeta):
 
         bboxes = bboxes[:, :4]
 
-        gt_flags = bboxes.new_zeros((bboxes.shape[0], ), dtype=torch.uint8)
+        gt_flags = bboxes.new_zeros((bboxes.shape[0],), dtype=torch.uint8)
+        # 两阶段目标检测要用，指定bbox是gt还是proposal，为1表示是gt，为0表示是proposal
         if self.add_gt_as_proposals and len(gt_bboxes) > 0:
             if gt_labels is None:
                 raise ValueError(

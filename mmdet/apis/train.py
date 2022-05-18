@@ -37,7 +37,7 @@ def init_random_seed(seed=None, device='cuda'):
     # some potential bugs. Please refer to
     # https://github.com/open-mmlab/mmdetection/issues/6339
     rank, world_size = get_dist_info()
-    seed = np.random.randint(2**31)
+    seed = np.random.randint(2 ** 31)
     if world_size == 1:
         return seed
 
@@ -95,6 +95,7 @@ def train_detector(model,
 
     runner_type = 'EpochBasedRunner' if 'runner' not in cfg else cfg.runner[
         'type']
+    # 初始化 data_loaders,内部初始化GroupSampler
     data_loaders = [
         build_dataloader(
             ds,
@@ -110,6 +111,7 @@ def train_detector(model,
     ]
 
     # put model on gpus
+    # 判断分布式
     if distributed:
         find_unused_parameters = cfg.get('find_unused_parameters', False)
         # Sets the `find_unused_parameters` parameter in
@@ -137,6 +139,7 @@ def train_detector(model,
         if 'total_epochs' in cfg:
             assert cfg.total_epochs == cfg.runner.max_epochs
 
+    # 初始化 runner
     runner = build_runner(
         cfg.runner,
         default_args=dict(
@@ -195,6 +198,7 @@ def train_detector(model,
         runner.register_hook(
             eval_hook(val_dataloader, **eval_cfg), priority='LOW')
 
+    # 权重加载和恢复
     resume_from = None
     if cfg.resume_from is None and cfg.get('auto_resume'):
         resume_from = find_latest_checkpoint(cfg.work_dir)
@@ -205,4 +209,6 @@ def train_detector(model,
         runner.resume(cfg.resume_from)
     elif cfg.load_from:
         runner.load_checkpoint(cfg.load_from)
+
+    # 运行 开始训练
     runner.run(data_loaders, cfg.workflow)
