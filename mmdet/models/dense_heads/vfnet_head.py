@@ -5,7 +5,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from mmcv.cnn import ConvModule, Scale
-from mmcv.ops import DeformConv2d
+from mmcv.ops import DeformConv2d, BorderAlign
 from mmcv.runner import force_fp32
 
 from mmdet.core import (MlvlPointGenerator, bbox_overlaps, build_assigner,
@@ -112,7 +112,6 @@ class VFNetHead(ATSSHead, FCOSHead):
                          bias_prob=0.01)),
                  **kwargs):
         # dcn base offsets, adapted from reppoints_head.py
-        # 可变性卷积
         self.num_dconv_points = 9
         self.dcn_kernel = int(np.sqrt(self.num_dconv_points))
         self.dcn_pad = int((self.dcn_kernel - 1) / 2)
@@ -172,6 +171,8 @@ class VFNetHead(ATSSHead, FCOSHead):
         # In order to reuse the `get_bboxes` in `BaseDenseHead.
         # Only be used in testing phase.
         self.prior_generator = self.fcos_prior_generator
+        # 加入了border align模块，让star conv 给峰值
+        self.border_align = BorderAlign(pool_size=10)
 
     @property
     def num_anchors(self):
@@ -289,23 +290,17 @@ class VFNetHead(ATSSHead, FCOSHead):
         # compute star deformable convolution offsets
         # converting dcn_offset to reg_feat.dtype thus VFNet can be
         # trained with FP16
-        # 使用star conv 得到dcn 偏移参数
-        dcn_offset_init = self.star_dcn_offset(bbox_pred, self.gradient_mul,
-                                               stride).to(reg_feat.dtype)
+        dcn_offset = self.star_dcn_offset(bbox_pred, self.gradient_mul,
+                                          stride, self.border_align).to(reg_feat.dtype)
 
         # refine the bbox_pred
-        reg_feat = self.relu(self.vfnet_reg_refine_dconv(reg_feat, dcn_offset_init))
+        reg_feat = self.relu(self.vfnet_reg_refine_dconv(reg_feat, dcn_offset))
         bbox_pred_refine = scale_refine(
             self.vfnet_reg_refine(reg_feat)).float().exp()
         bbox_pred_refine = bbox_pred_refine * bbox_pred.detach()
 
-        # 使用star conv 得到第二次的 dcn 偏移参数
-        dcn_offset_refine = self.star_dcn_offset(bbox_pred_refine, self.gradient_mul,
-                                                 stride).to(reg_feat.dtype)
-
         # predict the iou-aware cls score
-        # 使用refine后的边界特征去加强分数
-        cls_feat = self.relu(self.vfnet_cls_dconv(cls_feat, dcn_offset_refine))
+        cls_feat = self.relu(self.vfnet_cls_dconv(cls_feat, dcn_offset))
         cls_score = self.vfnet_cls(cls_feat)
 
         if self.training:
@@ -313,7 +308,7 @@ class VFNetHead(ATSSHead, FCOSHead):
         else:
             return cls_score, bbox_pred_refine
 
-    def star_dcn_offset(self, bbox_pred, gradient_mul, stride):
+    def star_dcn_offset(self, bbox_pred, gradient_mul, stride, border_align):
         """Compute the star deformable conv offsets.
 
         Args:
@@ -321,10 +316,11 @@ class VFNetHead(ATSSHead, FCOSHead):
             gradient_mul (float): Gradient multiplier.
             stride (int): The corresponding stride for feature maps,
                 used to project the bbox onto the feature map.
-
+            border_align: use borderdet border align sample pick point
         Returns:
             dcn_offsets (Tensor): The offsets for deformable convolution.
         """
+
         dcn_base_offset = self.dcn_base_offset.type_as(bbox_pred)
         bbox_pred_grad_mul = (1 - gradient_mul) * bbox_pred.detach() + \
                              gradient_mul * bbox_pred
@@ -445,7 +441,6 @@ class VFNetHead(ATSSHead, FCOSHead):
             pos_points, pos_bbox_preds)
         pos_decoded_target_preds = self.bbox_coder.decode(
             pos_points, pos_bbox_targets)
-        # 计算了粗糙的预测box与对应gt_box的giou
         iou_targets_ini = bbox_overlaps(
             pos_decoded_bbox_preds,
             pos_decoded_target_preds.detach(),
@@ -456,7 +451,6 @@ class VFNetHead(ATSSHead, FCOSHead):
 
         pos_decoded_bbox_preds_refine = \
             self.bbox_coder.decode(pos_points, pos_bbox_preds_refine)
-        # 计算了refine后的预测box与对应gt_box的giou
         iou_targets_rf = bbox_overlaps(
             pos_decoded_bbox_preds_refine,
             pos_decoded_target_preds.detach(),
