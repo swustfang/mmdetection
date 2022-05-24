@@ -244,10 +244,12 @@ class VFNetHead(ATSSHead, FCOSHead):
                     each scale level, each is a 4D-tensor, the channel
                     number is num_points * 4.
         """
+        featmap_sizes = [featmap.size()[-2:] for featmap in feats]
+        all_level_points = self.fcos_prior_generator.grid_priors(featmap_sizes)
         return multi_apply(self.forward_single, feats, self.scales,
-                           self.scales_refine, self.strides, self.reg_denoms)
+                           self.scales_refine, self.strides, self.reg_denoms, all_level_points)
 
-    def forward_single(self, x, scale, scale_refine, stride, reg_denom):
+    def forward_single(self, x, scale, scale_refine, stride, reg_denom, points):
         """Forward features of a single scale level.
 
         Args:
@@ -287,11 +289,35 @@ class VFNetHead(ATSSHead, FCOSHead):
         else:
             raise NotImplementedError
 
+        # 计算对于每一条边找一个峰值采样点
+        B, C, H, W = reg_feat.shape
+        # 将channel层平均，然后重复四次，丢到border align峰值采样
+        reg_feat_channel = reg_feat.mean(dim=1).unsqueeze(dim=1).repeat(1, 4, 1, 1)
+        # 将l,t,r,b转变成bboxes
+        points = points.unsqueeze(dim=0).repeat(2, 1, 1) / stride
+        pre_off = bbox_pred.permute(0, 2, 3, 1).reshape(B, -1, 4) / stride
+        pre_bboxes = self.compute_bbox(points, pre_off)
+
+        ltrb_conv, ltrb_sample_id = self.border_align(reg_feat_channel, pre_bboxes)
+        ltrb_sample_id = ltrb_sample_id.permute(0, 2, 1, 3).reshape(B, H * W, -1)
+        ltrb_sample_id = ltrb_sample_id.type(torch.float32)
+        sample_position_ltrb = torch.zeros_like(ltrb_sample_id)
+        wh = (pre_bboxes[:, :, 2:] - pre_bboxes[:, :, :2])
+        sample_position_ltrb[:, :, ::2] = pre_bboxes[:, :, 0].unsqueeze(dim=2) + wh[:, :, 0].unsqueeze(dim=2) * (
+                ltrb_sample_id[:, :, 1::2] / 10.0)
+        sample_position_ltrb[:, :, 1::2] = pre_bboxes[:, :, 1].unsqueeze(dim=2) + wh[:, :, 1].unsqueeze(dim=2) * (
+                ltrb_sample_id[:, :, ::2] / 10.0)
+        # B,WH,(x1,y1,x2,y2)
+        sample_offset = torch.zeros_like(sample_position_ltrb)
+        sample_offset[:, :, ::2] = points[:, :, 0].unsqueeze(dim=2) - sample_position_ltrb[:, :, ::2]
+        sample_offset[:, :, 1::2] = points[:, :, 1].unsqueeze(dim=2) - sample_position_ltrb[:, :, 1::2]
+        sample_offset = sample_offset.reshape(B, H, W, -1)
         # compute star deformable convolution offsets
         # converting dcn_offset to reg_feat.dtype thus VFNet can be
         # trained with FP16
+
         dcn_offset = self.star_dcn_offset(bbox_pred, self.gradient_mul,
-                                          stride, self.border_align).to(reg_feat.dtype)
+                                          sample_offset).to(reg_feat.dtype)
 
         # refine the bbox_pred
         reg_feat = self.relu(self.vfnet_reg_refine_dconv(reg_feat, dcn_offset))
@@ -308,7 +334,7 @@ class VFNetHead(ATSSHead, FCOSHead):
         else:
             return cls_score, bbox_pred_refine
 
-    def star_dcn_offset(self, bbox_pred, gradient_mul, stride, border_align):
+    def star_dcn_offset(self, bbox_pred, gradient_mul, offset):
         """Compute the star deformable conv offsets.
 
         Args:
@@ -320,30 +346,47 @@ class VFNetHead(ATSSHead, FCOSHead):
         Returns:
             dcn_offsets (Tensor): The offsets for deformable convolution.
         """
-
         dcn_base_offset = self.dcn_base_offset.type_as(bbox_pred)
         bbox_pred_grad_mul = (1 - gradient_mul) * bbox_pred.detach() + \
                              gradient_mul * bbox_pred
+        offset_grad_mul = (1 - gradient_mul) * offset.detach() + \
+                          gradient_mul * offset
         # map to the feature map scale
-        bbox_pred_grad_mul = bbox_pred_grad_mul / stride
+        bbox_pred_grad_mul = bbox_pred_grad_mul
         N, C, H, W = bbox_pred.size()
-
         x1 = bbox_pred_grad_mul[:, 0, :, :]
         y1 = bbox_pred_grad_mul[:, 1, :, :]
         x2 = bbox_pred_grad_mul[:, 2, :, :]
         y2 = bbox_pred_grad_mul[:, 3, :, :]
+
+        x1_offset = offset_grad_mul[:, :, :, 0]
+        y1_offset = offset_grad_mul[:, :, :, 1]
+        x2_offset = offset_grad_mul[:, :, :, 2]
+        y2_offset = offset_grad_mul[:, :, :, 3]
+
         bbox_pred_grad_mul_offset = bbox_pred.new_zeros(
             N, 2 * self.num_dconv_points, H, W)
         bbox_pred_grad_mul_offset[:, 0, :, :] = -1.0 * y1  # -y1
         bbox_pred_grad_mul_offset[:, 1, :, :] = -1.0 * x1  # -x1
+
         bbox_pred_grad_mul_offset[:, 2, :, :] = -1.0 * y1  # -y1
+        bbox_pred_grad_mul_offset[:, 3, :, :] = -1.0 * x1_offset  # -y1
+
         bbox_pred_grad_mul_offset[:, 4, :, :] = -1.0 * y1  # -y1
         bbox_pred_grad_mul_offset[:, 5, :, :] = x2  # x2
+
+        bbox_pred_grad_mul_offset[:, 6, :, :] = -1.0 * y1_offset  # -x1
         bbox_pred_grad_mul_offset[:, 7, :, :] = -1.0 * x1  # -x1
+
+        bbox_pred_grad_mul_offset[:, 10, :, :] = -1.0 * y2_offset  # x2
         bbox_pred_grad_mul_offset[:, 11, :, :] = x2  # x2
+
         bbox_pred_grad_mul_offset[:, 12, :, :] = y2  # y2
         bbox_pred_grad_mul_offset[:, 13, :, :] = -1.0 * x1  # -x1
+
         bbox_pred_grad_mul_offset[:, 14, :, :] = y2  # y2
+        bbox_pred_grad_mul_offset[:, 15, :, :] = -1.0 * x2_offset  # y2
+
         bbox_pred_grad_mul_offset[:, 16, :, :] = y2  # y2
         bbox_pred_grad_mul_offset[:, 17, :, :] = x2  # x2
         dcn_offset = bbox_pred_grad_mul_offset - dcn_base_offset
@@ -436,7 +479,7 @@ class VFNetHead(ATSSHead, FCOSHead):
 
         pos_bbox_targets = flatten_bbox_targets[pos_inds]
         pos_points = flatten_points[pos_inds]
-
+        # tblr点转化为bbox
         pos_decoded_bbox_preds = self.bbox_coder.decode(
             pos_points, pos_bbox_preds)
         pos_decoded_target_preds = self.bbox_coder.decode(
@@ -741,3 +784,12 @@ class VFNetHead(ATSSHead, FCOSHead):
             points = torch.stack(
                 (x.reshape(-1), y.reshape(-1)), dim=-1) + stride // 2
         return points
+
+    def compute_bbox(self, location, pred_offset):
+        detections = torch.stack([
+            location[:, :, 0] - pred_offset[:, :, 0],
+            location[:, :, 1] - pred_offset[:, :, 1],
+            location[:, :, 0] + pred_offset[:, :, 2],
+            location[:, :, 1] + pred_offset[:, :, 3]], dim=2)
+
+        return detections
