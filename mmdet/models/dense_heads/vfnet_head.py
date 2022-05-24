@@ -112,6 +112,8 @@ class VFNetHead(ATSSHead, FCOSHead):
                          bias_prob=0.01)),
                  **kwargs):
         # dcn base offsets, adapted from reppoints_head.py
+        self.stride = None
+        self.feat_shape = None
         self.num_dconv_points = 9
         self.dcn_kernel = int(np.sqrt(self.num_dconv_points))
         self.dcn_pad = int((self.dcn_kernel - 1) / 2)
@@ -289,33 +291,20 @@ class VFNetHead(ATSSHead, FCOSHead):
         else:
             raise NotImplementedError
 
-        # 计算对于每一条边找一个峰值采样点
-        B, C, H, W = reg_feat.shape
-        # 将channel层平均，然后重复四次，丢到border align峰值采样
-        reg_feat_channel = reg_feat.mean(dim=1).unsqueeze(dim=1).repeat(1, 4, 1, 1)
-        # 将l,t,r,b转变成bboxes
-        points = points.unsqueeze(dim=0).repeat(2, 1, 1) / stride
-        pre_off = bbox_pred.permute(0, 2, 3, 1).reshape(B, -1, 4) / stride
-        pre_bboxes = self.compute_bbox(points, pre_off)
+        self.feat_shape = reg_feat.shape
+        self.stride = stride
 
-        ltrb_conv, ltrb_sample_id = self.border_align(reg_feat_channel, pre_bboxes)
-        ltrb_sample_id = ltrb_sample_id.permute(0, 2, 1, 3).reshape(B, H * W, -1)
-        ltrb_sample_id = ltrb_sample_id.type(torch.float32)
-        sample_position_ltrb = torch.zeros_like(ltrb_sample_id)
-        wh = (pre_bboxes[:, :, 2:] - pre_bboxes[:, :, :2])
-        sample_position_ltrb[:, :, ::2] = pre_bboxes[:, :, 0].unsqueeze(dim=2) + wh[:, :, 0].unsqueeze(dim=2) * (
-                ltrb_sample_id[:, :, 1::2] / 10.0)
-        sample_position_ltrb[:, :, 1::2] = pre_bboxes[:, :, 1].unsqueeze(dim=2) + wh[:, :, 1].unsqueeze(dim=2) * (
-                ltrb_sample_id[:, :, ::2] / 10.0)
-        # B,WH,(x1,y1,x2,y2)
-        sample_offset = torch.zeros_like(sample_position_ltrb)
-        sample_offset[:, :, ::2] = points[:, :, 0].unsqueeze(dim=2) - sample_position_ltrb[:, :, ::2]
-        sample_offset[:, :, 1::2] = points[:, :, 1].unsqueeze(dim=2) - sample_position_ltrb[:, :, 1::2]
-        sample_offset = sample_offset.reshape(B, H, W, -1)
+        # 特种图中的anchor point点
+        points = points.unsqueeze(dim=0).repeat(reg_feat.shape[0], 1, 1) / stride
+
+        # 使用border采样峰值，并计算峰值偏差
+        # sample_offset:B W*H 4 ，4表示在4条边采样点位置相对于中心点在x,y上的偏移
+        sample_offset = self.relative_offset(reg_feat, points, bbox_pred)
+
         # compute star deformable convolution offsets
         # converting dcn_offset to reg_feat.dtype thus VFNet can be
         # trained with FP16
-
+        # 使用star conv 得到dcn的偏移参数
         dcn_offset = self.star_dcn_offset(bbox_pred, self.gradient_mul,
                                           sample_offset).to(reg_feat.dtype)
 
@@ -325,8 +314,14 @@ class VFNetHead(ATSSHead, FCOSHead):
             self.vfnet_reg_refine(reg_feat)).float().exp()
         bbox_pred_refine = bbox_pred_refine * bbox_pred.detach()
 
+        sample_offset_refine = self.relative_offset(reg_feat, points, bbox_pred)
+        # 使用star conv 得到第二次的 dcn 偏移参数
+        dcn_offset_refine = self.star_dcn_offset(bbox_pred_refine, self.gradient_mul,
+                                                 sample_offset_refine).to(reg_feat.dtype)
+
+        # 使用refine后的边界特征去加强分数
         # predict the iou-aware cls score
-        cls_feat = self.relu(self.vfnet_cls_dconv(cls_feat, dcn_offset))
+        cls_feat = self.relu(self.vfnet_cls_dconv(cls_feat, dcn_offset_refine))
         cls_score = self.vfnet_cls(cls_feat)
 
         if self.training:
@@ -389,6 +384,7 @@ class VFNetHead(ATSSHead, FCOSHead):
 
         bbox_pred_grad_mul_offset[:, 16, :, :] = y2  # y2
         bbox_pred_grad_mul_offset[:, 17, :, :] = x2  # x2
+        # 这一步的意义是？
         dcn_offset = bbox_pred_grad_mul_offset - dcn_base_offset
 
         return dcn_offset
@@ -793,3 +789,32 @@ class VFNetHead(ATSSHead, FCOSHead):
             location[:, :, 1] + pred_offset[:, :, 3]], dim=2)
 
         return detections
+
+    def relative_offset(self, reg_feat, points, bbox_pred):
+        # 特征图原本大小
+        B, C, H, W = self.feat_shape
+        # 将channel层平均，然后重复四次，为了使用border Align模块
+        reg_feat_channel = reg_feat.mean(dim=1).unsqueeze(dim=1).repeat(1, 4, 1, 1)
+        # 得到bboxes相对于point的ltrb
+        pre_off = bbox_pred.permute(0, 2, 3, 1).reshape(B, -1, 4) / self.stride
+        # 计算bboxes
+        pre_bboxes = self.compute_bbox(points, pre_off)
+        # 丢到border align峰值采样,得到l,t,r,b四条边的采样位置
+        ltrb_sample_conv, ltrb_sample_id = self.border_align(reg_feat_channel, pre_bboxes)
+        ltrb_sample_id = ltrb_sample_id.permute(0, 2, 1, 3).reshape(B, H * W, -1)
+        ltrb_sample_id = ltrb_sample_id.type(torch.float32)
+        sample_position_ltrb = torch.zeros_like(ltrb_sample_id)
+        # 计算高度和宽度
+        wh = (pre_bboxes[:, :, 2:] - pre_bboxes[:, :, :2])
+        # 计算采样在特征图上的位置
+        sample_position_ltrb[:, :, ::2] = pre_bboxes[:, :, 0].unsqueeze(dim=2) + wh[:, :, 0].unsqueeze(dim=2) * (
+                ltrb_sample_id[:, :, 1::2] / 10.0)
+        sample_position_ltrb[:, :, 1::2] = pre_bboxes[:, :, 1].unsqueeze(dim=2) + wh[:, :, 1].unsqueeze(dim=2) * (
+                ltrb_sample_id[:, :, ::2] / 10.0)
+        # B,WH,(x1,y1,x2,y2)
+        sample_offset = torch.zeros_like(sample_position_ltrb)
+        # 计算相对于中心点的偏移
+        sample_offset[:, :, ::2] = points[:, :, 0].unsqueeze(dim=2) - sample_position_ltrb[:, :, ::2]
+        sample_offset[:, :, 1::2] = points[:, :, 1].unsqueeze(dim=2) - sample_position_ltrb[:, :, 1::2]
+        sample_offset = sample_offset.reshape(B, H, W, -1)
+        return sample_offset
