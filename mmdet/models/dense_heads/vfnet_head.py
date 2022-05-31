@@ -314,14 +314,14 @@ class VFNetHead(ATSSHead, FCOSHead):
             self.vfnet_reg_refine(reg_feat)).float().exp()
         bbox_pred_refine = bbox_pred_refine * bbox_pred.detach()
 
-        sample_offset_refine = self.relative_offset(reg_feat, points, bbox_pred)
+        # sample_offset_refine = self.relative_offset(reg_feat, points, bbox_pred)
         # 使用star conv 得到第二次的 dcn 偏移参数
-        dcn_offset_refine = self.star_dcn_offset(bbox_pred_refine, self.gradient_mul,
-                                                 sample_offset_refine).to(reg_feat.dtype)
+        # dcn_offset_refine = self.star_dcn_offset(bbox_pred_refine, self.gradient_mul,
+        #                                          sample_offset_refine).to(reg_feat.dtype)
 
         # 使用refine后的边界特征去加强分数
         # predict the iou-aware cls score
-        cls_feat = self.relu(self.vfnet_cls_dconv(cls_feat, dcn_offset_refine))
+        cls_feat = self.relu(self.vfnet_cls_dconv(cls_feat, dcn_offset))
         cls_score = self.vfnet_cls(cls_feat)
 
         if self.training:
@@ -801,16 +801,52 @@ class VFNetHead(ATSSHead, FCOSHead):
         pre_bboxes = self.compute_bbox(points, pre_off)
         # 丢到border align峰值采样,得到l,t,r,b四条边的采样位置
         ltrb_sample_conv, ltrb_sample_id = self.border_align(reg_feat_channel, pre_bboxes)
+        ltrb_sample_id[(ltrb_sample_id == 0) | (ltrb_sample_id == 10)] = 5
         ltrb_sample_id = ltrb_sample_id.permute(0, 2, 1, 3).reshape(B, H * W, -1)
         ltrb_sample_id = ltrb_sample_id.type(torch.float32)
+
         sample_position_ltrb = torch.zeros_like(ltrb_sample_id)
         # 计算高度和宽度
         wh = (pre_bboxes[:, :, 2:] - pre_bboxes[:, :, :2])
         # 计算采样在特征图上的位置
-        sample_position_ltrb[:, :, ::2] = pre_bboxes[:, :, 0].unsqueeze(dim=2) + wh[:, :, 0].unsqueeze(dim=2) * (
-                ltrb_sample_id[:, :, 1::2] / 10.0)
-        sample_position_ltrb[:, :, 1::2] = pre_bboxes[:, :, 1].unsqueeze(dim=2) + wh[:, :, 1].unsqueeze(dim=2) * (
-                ltrb_sample_id[:, :, ::2] / 10.0)
+
+        # 预测框左上角(x0,y0) 右下角(x1,y1)
+        # 上边界的x位置 = x0+w*(t_id/10)
+        sample_position_ltrb[:, :, 0] = pre_bboxes[:, :, 0] + wh[:, :, 0] * (ltrb_sample_id[:, :, 1] / 10.0)
+        # 左边界的y位置 = y0+h*(l_id/10)
+        sample_position_ltrb[:, :, 1] = pre_bboxes[:, :, 1] + wh[:, :, 1] * (ltrb_sample_id[:, :, 0] / 10.0)
+        # 下边界的x位置 = x1-w*(b_id/10)
+        sample_position_ltrb[:, :, 2] = pre_bboxes[:, :, 2] - wh[:, :, 0] * (ltrb_sample_id[:, :, 3] / 10.0)
+        # 左边界的y位置 = y1-h*(r_id/10)
+        sample_position_ltrb[:, :, 3] = pre_bboxes[:, :, 3] - wh[:, :, 1] * (ltrb_sample_id[:, :, 2] / 10.0)
+        '''
+        可视化采样点
+        feat = reg_feat_channel[0,0,:,:]
+        x = feat
+        x = x.cpu().detach().numpy()
+        x = (x-np.min(x))/(np.max(x)-np.min(x))
+        img = x *255
+        from mmcv.visualization import imshow_bboxes
+        import matplotlib.pyplot as plt
+        # bb表示x1,x2,y1,y2
+        bb = pre_bboxes[0,:,:].cpu().detach().numpy()
+        # cc表示上边界x,左边界y,下边界x,右边界y
+        cc = sample_position_ltrb[0,:,:].cpu().detach().numpy()
+        # img = np.ones([H, W, 3], np.uint8) * 255
+        imshow_bboxes(img, bb[248::463, :], show=False, colors='green', thickness=1)
+        # plt.scatter(cc[248::463, 0],bb[248::463, 1], color='red') #上边界采样
+        # plt.scatter(cc[248::463, 2],bb[248::463, 3], color='green') # 下边界
+        # plt.scatter(bb[248::463, 0],cc[248::463, 1], color='blue') # 左边界
+        # plt.scatter(bb[248::463, 2],cc[248::463, 3], color='black') # 右边界
+        plt.scatter(cc[:, 0],bb[:, 1], color='red') #上边界采样
+        plt.scatter(cc[:, 2],bb[:, 3], color='green') # 下边界
+        plt.scatter(bb[:, 0],cc[:, 1], color='blue') # 左边界
+        plt.scatter(bb[:, 2],cc[:, 3], color='black') # 右边界
+        plt.grid()
+        plt.imshow(img)
+        plt.show()
+        '''
+
         # B,WH,(x1,y1,x2,y2)
         sample_offset = torch.zeros_like(sample_position_ltrb)
         # 计算相对于中心点的偏移
