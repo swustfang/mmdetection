@@ -67,6 +67,7 @@ class ATSSHead(AnchorHead):
         self.relu = nn.ReLU(inplace=True)
         self.cls_convs = nn.ModuleList()
         self.reg_convs = nn.ModuleList()
+        self.feat_channels_reg = self.feat_channels + self.num_classes
         for i in range(self.stacked_convs):
             chn = self.in_channels if i == 0 else self.feat_channels
             self.cls_convs.append(
