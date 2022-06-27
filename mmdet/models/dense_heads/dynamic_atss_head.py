@@ -134,8 +134,6 @@ class DynamicATSSHead(AnchorHead):
         self.scales = nn.ModuleList(
             [Scale(1.0) for _ in self.prior_generator.strides])
 
-        self.conv_cat = nn.Conv2d(self.feat_channels_reg, self.feat_channels, 1, padding=0)
-
     def forward(self, feats):
         """Forward features from the upstream network.
 
@@ -172,18 +170,12 @@ class DynamicATSSHead(AnchorHead):
                     channel number is (N, num_anchors * 1, H, W).
         """
         cls_feat = x
+        reg_feat = x
         for cls_conv in self.cls_convs:
             cls_feat = cls_conv(cls_feat)
-        cls_score = self.atss_cls(cls_feat)
-
-        use_conv_cat = True
-        if use_conv_cat:
-            reg_feat = self.conv_cat(torch.cat((x, cls_score), dim=1))
-        else:
-            reg_feat = x
-
         for reg_conv in self.reg_convs:
             reg_feat = reg_conv(reg_feat)
+        cls_score = self.atss_cls(cls_feat)
         # we just follow atss, not apply exp in bbox_pred
         bbox_pred = scale(self.atss_reg(reg_feat)).float()
         centerness = self.atss_centerness(reg_feat)

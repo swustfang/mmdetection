@@ -105,6 +105,7 @@ class TaskAlignedAssigner(BaseAssigner):
         # limit the positive sample's center in gt
         anchors_cx = (anchors[:, 0] + anchors[:, 2]) / 2.0
         anchors_cy = (anchors[:, 1] + anchors[:, 3]) / 2.0
+        # 分开了
         for gt_idx in range(num_gt):
             candidate_idxs[:, gt_idx] += gt_idx * num_bboxes
         ep_anchors_cx = anchors_cx.view(1, -1).expand(
@@ -129,7 +130,6 @@ class TaskAlignedAssigner(BaseAssigner):
         index = candidate_idxs.view(-1)[is_pos.view(-1)]
         overlaps_inf[index] = overlaps.t().contiguous().view(-1)[index]
         overlaps_inf = overlaps_inf.view(num_gt, -1).t()
-
         max_overlaps, argmax_overlaps = overlaps_inf.max(dim=1)
         assigned_gt_inds[
             max_overlaps != -INF] = argmax_overlaps[max_overlaps != -INF] + 1

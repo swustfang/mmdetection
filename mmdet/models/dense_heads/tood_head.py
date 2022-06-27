@@ -328,15 +328,19 @@ class TOODHead(ATSSHead):
         cls_score = cls_score.permute(0, 2, 3, 1).reshape(
             -1, self.cls_out_channels).contiguous()
         bbox_pred = bbox_pred.permute(0, 2, 3, 1).reshape(-1, 4)
+        # bbox_targets
         bbox_targets = bbox_targets.reshape(-1, 4)
         labels = labels.reshape(-1)
         alignment_metrics = alignment_metrics.reshape(-1)
         label_weights = label_weights.reshape(-1)
         targets = labels if self.epoch < self.initial_epoch else (
             labels, alignment_metrics)
+
+        # focal loss or crossEntropy
         cls_loss_func = self.initial_loss_cls \
             if self.epoch < self.initial_epoch else self.loss_cls
 
+        # 分类损失
         loss_cls = cls_loss_func(
             cls_score, targets, label_weights, avg_factor=1.0)
 
@@ -345,6 +349,7 @@ class TOODHead(ATSSHead):
         pos_inds = ((labels >= 0)
                     & (labels < bg_class_ind)).nonzero().squeeze(1)
 
+        # 正样本计算回归损失
         if len(pos_inds) > 0:
             pos_bbox_targets = bbox_targets[pos_inds]
             pos_bbox_pred = bbox_pred[pos_inds]
