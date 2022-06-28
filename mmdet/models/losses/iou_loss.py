@@ -42,7 +42,7 @@ def iou_loss(pred, target, linear=False, mode='log', eps=1e-6):
     if mode == 'linear':
         loss = 1 - ious
     elif mode == 'square':
-        loss = 1 - ious**2
+        loss = 1 - ious ** 2
     elif mode == 'log':
         loss = -ious.log()
     else:
@@ -155,15 +155,15 @@ def diou_loss(pred, target, eps=1e-7):
     cw = enclose_wh[:, 0]
     ch = enclose_wh[:, 1]
 
-    c2 = cw**2 + ch**2 + eps
+    c2 = cw ** 2 + ch ** 2 + eps
 
     b1_x1, b1_y1 = pred[:, 0], pred[:, 1]
     b1_x2, b1_y2 = pred[:, 2], pred[:, 3]
     b2_x1, b2_y1 = target[:, 0], target[:, 1]
     b2_x2, b2_y2 = target[:, 2], target[:, 3]
 
-    left = ((b2_x1 + b2_x2) - (b1_x1 + b1_x2))**2 / 4
-    right = ((b2_y1 + b2_y2) - (b1_y1 + b1_y2))**2 / 4
+    left = ((b2_x1 + b2_x2) - (b1_x1 + b1_x2)) ** 2 / 4
+    right = ((b2_y1 + b2_y2) - (b1_y1 + b1_y2)) ** 2 / 4
     rho2 = left + right
 
     # DIoU
@@ -211,7 +211,7 @@ def ciou_loss(pred, target, eps=1e-7):
     cw = enclose_wh[:, 0]
     ch = enclose_wh[:, 1]
 
-    c2 = cw**2 + ch**2 + eps
+    c2 = cw ** 2 + ch ** 2 + eps
 
     b1_x1, b1_y1 = pred[:, 0], pred[:, 1]
     b1_x2, b1_y2 = pred[:, 2], pred[:, 3]
@@ -221,11 +221,11 @@ def ciou_loss(pred, target, eps=1e-7):
     w1, h1 = b1_x2 - b1_x1, b1_y2 - b1_y1 + eps
     w2, h2 = b2_x2 - b2_x1, b2_y2 - b2_y1 + eps
 
-    left = ((b2_x1 + b2_x2) - (b1_x1 + b1_x2))**2 / 4
-    right = ((b2_y1 + b2_y2) - (b1_y1 + b1_y2))**2 / 4
+    left = ((b2_x1 + b2_x2) - (b1_x1 + b1_x2)) ** 2 / 4
+    right = ((b2_y1 + b2_y2) - (b1_y1 + b1_y2)) ** 2 / 4
     rho2 = left + right
 
-    factor = 4 / math.pi**2
+    factor = 4 / math.pi ** 2
     v = factor * torch.pow(torch.atan(w2 / h2) - torch.atan(w1 / h1), 2)
 
     with torch.no_grad():
@@ -234,6 +234,56 @@ def ciou_loss(pred, target, eps=1e-7):
     # CIoU
     cious = ious - (rho2 / c2 + alpha * v)
     loss = 1 - cious.clamp(min=-1.0, max=1.0)
+    return loss
+
+
+@mmcv.jit(derivate=True, coderize=True)
+@weighted_loss
+def siou_loss(box1, box2, eps=1e-7):
+    """
+    calculate iou. box1 and box2 are torch tensor with shape [M, 4] and [Nm 4].
+    SIoU Loss https://arxiv.org/pdf/2205.12740.pdf
+    Args:
+        box1 (Tensor): Predicted bboxes of format (x1, y1, x2, y2),
+            shape (n, 4).
+        box2 (Tensor): Corresponding gt bboxes, shape (n, 4).
+        eps (float): Eps to avoid log(0).
+    Return:
+        Tensor: Loss tensor.
+    """
+    b1_x1, b1_y1, b1_x2, b1_y2 = box1[:, 0], box1[:, 1], box1[:, 2], box1[:, 3]
+    b2_x1, b2_y1, b2_x2, b2_y2 = box2[:, 0], box2[:, 1], box2[:, 2], box2[:, 3]
+    # Intersection area
+    inter = (torch.min(b1_x2, b2_x2) - torch.max(b1_x1, b2_x1)).clamp(0) * \
+            (torch.min(b1_y2, b2_y2) - torch.max(b1_y1, b2_y1)).clamp(0)
+    # Union Area
+    w1, h1 = b1_x2 - b1_x1, b1_y2 - b1_y1 + eps
+    w2, h2 = b2_x2 - b2_x1, b2_y2 - b2_y1 + eps
+    union = w1 * h1 + w2 * h2 - inter + eps
+    iou = inter / union
+
+    cw = torch.max(b1_x2, b2_x2) - torch.min(b1_x1, b2_x1)  # convex width
+    ch = torch.max(b1_y2, b2_y2) - torch.min(b1_y1, b2_y1)  # convex height
+
+    s_cw = (b2_x1 + b2_x2 - b1_x1 - b1_x2) * 0.5
+    s_ch = (b2_y1 + b2_y2 - b1_y1 - b1_y2) * 0.5
+    sigma = torch.pow(s_cw ** 2 + s_ch ** 2, 0.5)
+    sin_alpha_1 = torch.abs(s_cw) / sigma
+    sin_alpha_2 = torch.abs(s_ch) / sigma
+    threshold = pow(2, 0.5) / 2
+    sin_alpha = torch.where(sin_alpha_1 > threshold, sin_alpha_2, sin_alpha_1)
+    angle_cost = torch.cos(torch.arcsin(sin_alpha) * 2 - math.pi / 2)
+    rho_x = (s_cw / cw) ** 2
+    rho_y = (s_ch / ch) ** 2
+    gamma = angle_cost - 2
+    distance_cost = 2 - torch.exp(gamma * rho_x) - torch.exp(gamma * rho_y)
+    omiga_w = torch.abs(w1 - w2) / torch.max(w1, w2)
+    omiga_h = torch.abs(h1 - h2) / torch.max(h1, h2)
+    shape_cost = torch.pow(1 - torch.exp(-1 * omiga_w), 4) + torch.pow(1 - torch.exp(-1 * omiga_h), 4)
+    iou = iou - 0.5 * (distance_cost + shape_cost)
+
+    # SIoU
+    loss = 1.0 - iou
     return loss
 
 
@@ -464,6 +514,46 @@ class CIoULoss(nn.Module):
             assert weight.shape == pred.shape
             weight = weight.mean(-1)
         loss = self.loss_weight * ciou_loss(
+            pred,
+            target,
+            weight,
+            eps=self.eps,
+            reduction=reduction,
+            avg_factor=avg_factor,
+            **kwargs)
+        return loss
+
+
+@LOSSES.register_module()
+class SIoULoss(nn.Module):
+
+    def __init__(self, eps=1e-7, reduction='mean', loss_weight=1.0):
+        super(SIoULoss, self).__init__()
+        self.eps = eps
+        self.reduction = reduction
+        self.loss_weight = loss_weight
+
+    def forward(self,
+                pred,
+                target,
+                weight=None,
+                avg_factor=None,
+                reduction_override=None,
+                **kwargs):
+        if weight is not None and not torch.any(weight > 0):
+            if pred.dim() == weight.dim() + 1:
+                weight = weight.unsqueeze(1)
+            return (pred * weight).sum()  # 0
+        assert reduction_override in (None, 'none', 'mean', 'sum')
+        reduction = (
+            reduction_override if reduction_override else self.reduction)
+        if weight is not None and weight.dim() > 1:
+            # TODO: remove this in the future
+            # reduce the weight of shape (n, 4) to (n,) to match the
+            # siou_loss of shape (n,)
+            assert weight.shape == pred.shape
+            weight = weight.mean(-1)
+        loss = self.loss_weight * siou_loss(
             pred,
             target,
             weight,
