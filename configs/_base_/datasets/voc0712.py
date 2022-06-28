@@ -1,7 +1,8 @@
 # dataset settings
 dataset_type = 'VOCDataset'
 # data_root = 'C:/PycharmProjects/data/VOCdevkit/'
-data_root = '/root/autodl-tmp/data/VOCdevkit/'
+data_root = '/home/fzy/project/data/VOCdevkit/'
+# data_root = '/root/autodl-tmp/data/VOCdevkit/'
 img_norm_cfg = dict(
     mean=[123.675, 116.28, 103.53], std=[58.395, 57.12, 57.375], to_rgb=True)
 train_pipeline = [
@@ -30,10 +31,12 @@ test_pipeline = [
         ])
 ]
 data = dict(
-    samples_per_gpu=32,
-    workers_per_gpu=8,
-    # samples_per_gpu=2,
+    # samples_per_gpu=32,
+    # workers_per_gpu=8,
+    # samples_per_gpu=1,
     # workers_per_gpu=1,
+    samples_per_gpu=12,
+    workers_per_gpu=2,
     train=dict(
         type='RepeatDataset',
         times=3,
