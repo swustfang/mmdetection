@@ -76,6 +76,10 @@ class ATSSAssignerDynamic(BaseAssigner):
         predicted_overlaps = self.iou_calculator(predicted_bboxes, gt_bboxes, mode='giou')
         ious = overlaps + predicted_overlaps
 
+        iou_anchor = self.iou_calculator(bboxes, gt_bboxes)
+        iou_pre = self.iou_calculator(predicted_bboxes, gt_bboxes)
+        iou_sum = iou_anchor + iou_pre
+
         # assign 0 by default
         assigned_gt_inds = overlaps.new_full((num_bboxes,),
                                              0,
@@ -138,13 +142,25 @@ class ATSSAssignerDynamic(BaseAssigner):
         # get corresponding iou for the these candidates, and compute the
         # Introducing the prediction to the ATSS
         # mean and std, set mean + std as the iou threshold
-        # 这里修改使用了两者的iou之和
+        # 这里修改使用了两者的iou之和,giou的
         candidate_overlaps = ious[candidate_idxs, torch.arange(num_gt)]
-        overlaps_mean_per_gt = candidate_overlaps.mean(0)
-        overlaps_std_per_gt = candidate_overlaps.std(0)
-        overlaps_thr_per_gt = overlaps_mean_per_gt + overlaps_std_per_gt
+        # overlaps_mean_per_gt = candidate_overlaps.mean(0)
+        # overlaps_std_per_gt = candidate_overlaps.std(0)
+        # overlaps_thr_per_gt = overlaps_mean_per_gt + overlaps_std_per_gt
 
-        is_pos = candidate_overlaps >= overlaps_thr_per_gt[None, :]
+        # iou的
+        candidate_overlaps1 = iou_sum[candidate_idxs, torch.arange(num_gt)]
+        overlaps_thr_per_gt_iou = candidate_overlaps1.mean(0) + candidate_overlaps1.std(0)
+
+        is_pos_iou = candidate_overlaps1 >= overlaps_thr_per_gt_iou[None, :]
+        # 计算iou采样数目
+        is_pos = torch.full_like(is_pos_iou, False)
+        # 每一个gt的采样数目
+        iou_sample_nums = is_pos_iou.sum(dim=0)
+        # 在根据采样数目选取前k大的giou样本
+        for gt_id in range(num_gt):
+            _, topk_idxs = candidate_overlaps[:, gt_id].topk(iou_sample_nums[gt_id], dim=0, largest=True)
+            is_pos[topk_idxs, gt_id] = True
 
         # limit the positive sample's center in gt
         for gt_idx in range(num_gt):
